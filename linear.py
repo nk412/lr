@@ -72,7 +72,7 @@ def get_team_id(team_key):
 
 def cmd_issue_view(args):
     if not args:
-        print("usage: linear.py issue <issue_id or url>")
+        print("usage: lr issue <issue_id or url>")
         sys.exit(1)
     issue_id = parse_issue_id(args[0])
     data = gql(
@@ -104,7 +104,7 @@ def cmd_issue_create(args):
     team_key = opts.get("team")
     title = opts.get("title")
     if not team_key or not title:
-        print("usage: linear.py issue create --team <team> --title <title> [--desc <description>] [--project <project_name>]")
+        print("usage: lr issue create --team <team> --title <title> [--desc <description>] [--project <project_name>]")
         sys.exit(1)
     team_id = get_team_id(team_key)
     variables = {"teamId": team_id, "title": title}
@@ -296,7 +296,7 @@ PROJECT_SUBCOMMANDS = {
 
 
 def help_project():
-    print("linear.py project — manage Linear projects\n")
+    print("lr project — manage Linear projects\n")
     print("Subcommands:")
     print("  list [--team <team_key>] [--status <status>]")
     print("                              List projects, optionally filtered by team and/or status")
@@ -318,7 +318,7 @@ ISSUE_SUBCOMMANDS = {
 
 
 def help_issue():
-    print("linear.py issue — manage Linear issues\n")
+    print("lr issue — manage Linear issues\n")
     print("Subcommands:")
     print("  show <issue_id or url>      View issue details and comments")
     print("  list [options]              List issues (defaults to your assigned issues)")
@@ -348,12 +348,12 @@ COMMANDS = {
 
 
 def help_main():
-    print("linear.py — CLI for the Linear API\n")
+    print("lr — CLI for the Linear API\n")
     print("Requires LINEAR_API_KEY environment variable.\n")
     print("Commands:")
     print("  issue    Manage issues (show, list, create)")
     print("  project  Manage projects (list)\n")
-    print("Run 'linear.py <command>' with no subcommand for detailed help.")
+    print("Run 'lr <command>' with no subcommand for detailed help.")
 
 
 def main():
