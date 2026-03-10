@@ -101,6 +101,23 @@ def cmd_issue_view(args):
             print(f"\n### {name} ({c['createdAt']})\n{c['body']}")
 
 
+def get_todo_state_id(team_id):
+    data = gql(
+        """
+        query teamStates($teamId: String!) {
+            team(id: $teamId) {
+                states { nodes { id name } }
+            }
+        }
+        """,
+        {"teamId": team_id},
+    )
+    for s in data["team"]["states"]["nodes"]:
+        if s["name"].lower() == "todo":
+            return s["id"]
+    return None
+
+
 def cmd_issue_create(args):
     opts, _ = parse_args(args, ["team", "title", "desc", "project"])
     team_key = opts.get("team")
@@ -110,9 +127,12 @@ def cmd_issue_create(args):
         sys.exit(1)
     team_id = get_team_id(team_key)
     variables = {"teamId": team_id, "title": title}
+    todo_id = get_todo_state_id(team_id)
+    if todo_id:
+        variables["stateId"] = todo_id
     mutation = """
-        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String) {
-            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId }) {
+        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String, $stateId: String) {
+            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId, stateId: $stateId }) {
                 success
                 issue { identifier title url }
             }

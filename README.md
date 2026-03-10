@@ -36,6 +36,9 @@ lr issue show IDO-134
 # Create an issue
 lr issue create --team ENG --title "Fix login bug"
 
+# Create an issue on a project with a description
+lr issue create --team ENG --title "Fix login bug" --project "Q1 Roadmap" --desc "OAuth token refresh fails after 30min"
+
 # List projects
 lr project list --team ENG
 ```
