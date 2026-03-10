@@ -23,7 +23,9 @@ def gql(query, variables=None):
         json={"query": query, "variables": variables or {}},
         headers={"Authorization": API_KEY, "Content-Type": "application/json"},
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        print(f"HTTP {resp.status_code}: {resp.text}")
+        sys.exit(1)
     data = resp.json()
     if "errors" in data:
         print(f"GraphQL error: {data['errors']}")
@@ -256,28 +258,18 @@ def cmd_project_list(args):
     opts, _ = parse_args(args, ["team", "status"])
     team = opts.get("team")
     status = opts.get("status")
-    filter_clause = ""
-    variables = {}
-    if team:
-        filter_clause = ", filter: { accessibleTeams: { key: { eq: $teamKey } } }"
-        variables["teamKey"] = team
-        query = f"""
-            query listProjects($teamKey: String!) {{
-                projects(first: 100, orderBy: updatedAt{filter_clause}) {{
-                    nodes {{ id name state teams {{ nodes {{ key }} }} }}
-                }}
-            }}
+    data = gql(
         """
-    else:
-        query = """
-            query listProjects {
-                projects(first: 100, orderBy: updatedAt) {
-                    nodes { id name state teams { nodes { key } } }
-                }
+        query listProjects {
+            projects(first: 100, orderBy: updatedAt) {
+                nodes { id name state teams { nodes { key } } }
             }
+        }
         """
-    data = gql(query, variables)
+    )
     projects = data["projects"]["nodes"]
+    if team:
+        projects = [p for p in projects if any(t["key"] == team for t in p["teams"]["nodes"])]
     if status:
         projects = [p for p in projects if p["state"].lower() == status.lower()]
     if not projects:
