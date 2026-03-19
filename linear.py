@@ -275,19 +275,30 @@ def cmd_issue_list(args):
 
 
 def cmd_project_list(args):
-    opts, _ = parse_args(args, ["team", "status"])
+    opts, _ = parse_args(args, ["team", "status", "limit"])
     team = opts.get("team")
     status = opts.get("status")
-    data = gql(
-        """
-        query listProjects {
-            projects(first: 100, orderBy: updatedAt) {
-                nodes { id name state teams { nodes { key } } }
+    limit = int(opts.get("limit") or 100)
+    projects = []
+    cursor = None
+    while len(projects) < limit:
+        batch = min(limit - len(projects), 100)
+        data = gql(
+            """
+            query listProjects($cursor: String, $first: Int!) {
+                projects(first: $first, after: $cursor, orderBy: updatedAt, includeArchived: true) {
+                    nodes { id name state teams { nodes { key } } }
+                    pageInfo { hasNextPage endCursor }
+                }
             }
-        }
-        """
-    )
-    projects = data["projects"]["nodes"]
+            """,
+            {"cursor": cursor, "first": batch},
+        )
+        projects.extend(data["projects"]["nodes"])
+        pi = data["projects"]["pageInfo"]
+        if not pi["hasNextPage"]:
+            break
+        cursor = pi["endCursor"]
     if team:
         projects = [p for p in projects if any(t["key"] == team for t in p["teams"]["nodes"])]
     if status:
@@ -310,9 +321,10 @@ PROJECT_SUBCOMMANDS = {
 def help_project():
     print("lr project — manage Linear projects\n")
     print("Subcommands:")
-    print("  list [--team <team_key>] [--status <status>]")
+    print("  list [--team <team_key>] [--status <status>] [--limit <n>]")
     print("                              List projects, optionally filtered by team and/or status")
     print("                              Status is case-insensitive (e.g. started, completed, planned)")
+    print("                              --limit defaults to 100; use a higher value to fetch more")
 
 
 def cmd_project(args):
