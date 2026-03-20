@@ -14,6 +14,7 @@ description: CLI tool to interact with Linear tickets, projects and issues.
 lr issue show <issue_id or url>
 lr issue list [--team <TEAM_KEY>] [--project <project_name>]
 lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>]
+lr issue update <issue_id or url> [--priority <none|urgent|high|medium|low>]
 
 # Projects
 lr project list [--team <TEAM_KEY>] [--status <status>]

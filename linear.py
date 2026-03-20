@@ -152,6 +152,48 @@ def cmd_issue_create(args):
     print(issue["url"])
 
 
+PRIORITY_MAP = {
+    "none": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4,
+}
+
+
+def cmd_issue_update(args):
+    opts, rest = parse_args(args, ["priority"])
+    if not rest:
+        print("usage: lr issue update <issue_id or url> [--priority <none|urgent|high|medium|low>]")
+        sys.exit(1)
+    issue_id = parse_issue_id(rest[0])
+    variables = {"issueId": issue_id}
+    input_fields = {}
+    if "priority" in opts:
+        p = opts["priority"].lower()
+        if p not in PRIORITY_MAP:
+            print(f"Invalid priority '{opts['priority']}'. Must be one of: {', '.join(PRIORITY_MAP)}")
+            sys.exit(1)
+        input_fields["priority"] = PRIORITY_MAP[p]
+    if not input_fields:
+        print("Nothing to update. Provide at least one option (e.g. --priority low).")
+        sys.exit(1)
+    variables["input"] = input_fields
+    data = gql(
+        """
+        mutation updateIssue($issueId: String!, $input: IssueUpdateInput!) {
+            issueUpdate(id: $issueId, input: $input) {
+                success
+                issue { identifier title url priority }
+            }
+        }
+        """,
+        variables,
+    )
+    result = data["issueUpdate"]
+    if not result["success"]:
+        print("Failed to update issue.")
+        sys.exit(1)
+    issue = result["issue"]
+    print(f"Updated {issue['identifier']}: {issue['title']}")
+
+
 def get_project_id(name):
     data = gql(
         """
@@ -338,6 +380,7 @@ ISSUE_SUBCOMMANDS = {
     "show": cmd_issue_view,
     "list": cmd_issue_list,
     "create": cmd_issue_create,
+    "update": cmd_issue_update,
 }
 
 
@@ -346,7 +389,8 @@ def help_issue():
     print("Subcommands:")
     print("  show <issue_id or url>      View issue details and comments")
     print("  list [options]              List issues (defaults to your assigned issues)")
-    print("  create [options]            Create a new issue\n")
+    print("  create [options]            Create a new issue")
+    print("  update <issue_id> [options] Update an existing issue\n")
     print("Options for 'list':")
     print("  --team <team_key>           Filter by team key (e.g. IDO, DAST)")
     print("  --project <project_name>    Filter by project name (exact match)")
@@ -355,7 +399,9 @@ def help_issue():
     print("  --team <team_key>           Team to create the issue in (required)")
     print("  --title <title>             Issue title (required)")
     print("  --desc <description>        Issue description")
-    print("  --project <project_name>    Add issue to a project (exact name match)")
+    print("  --project <project_name>    Add issue to a project (exact name match)\n")
+    print("Options for 'update':")
+    print("  --priority <level>          Set priority (none, urgent, high, medium, low)")
 
 
 def cmd_issue(args):
@@ -375,7 +421,7 @@ def help_main():
     print("lr — CLI for the Linear API\n")
     print("Requires LINEAR_API_KEY environment variable.\n")
     print("Commands:")
-    print("  issue    Manage issues (show, list, create)")
+    print("  issue    Manage issues (show, list, create, update)")
     print("  project  Manage projects (list)\n")
     print("Run 'lr <command>' with no subcommand for detailed help.")
 
