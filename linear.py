@@ -118,12 +118,25 @@ def get_todo_state_id(team_id):
     return None
 
 
+def get_issue_id(identifier):
+    """Resolve a human-readable issue identifier (e.g. DAST-1572) to its internal UUID."""
+    data = gql(
+        """
+        query getIssue($issueId: String!) {
+            issue(id: $issueId) { id }
+        }
+        """,
+        {"issueId": identifier},
+    )
+    return data["issue"]["id"]
+
+
 def cmd_issue_create(args):
-    opts, _ = parse_args(args, ["team", "title", "desc", "project"])
+    opts, _ = parse_args(args, ["team", "title", "desc", "project", "parent"])
     team_key = opts.get("team")
     title = opts.get("title")
     if not team_key or not title:
-        print("usage: lr issue create --team <team> --title <title> [--desc <description>] [--project <project_name>]")
+        print("usage: lr issue create --team <team> --title <title> [--desc <description>] [--project <project_name>] [--parent <issue_id>]")
         sys.exit(1)
     team_id = get_team_id(team_key)
     variables = {"teamId": team_id, "title": title}
@@ -131,8 +144,8 @@ def cmd_issue_create(args):
     if todo_id:
         variables["stateId"] = todo_id
     mutation = """
-        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String, $stateId: String) {
-            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId, stateId: $stateId }) {
+        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String, $stateId: String, $parentId: String) {
+            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId, stateId: $stateId, parentId: $parentId }) {
                 success
                 issue { identifier title url }
             }
@@ -142,6 +155,8 @@ def cmd_issue_create(args):
         variables["desc"] = opts["desc"]
     if opts.get("project"):
         variables["projectId"] = get_project_id(opts["project"])
+    if opts.get("parent"):
+        variables["parentId"] = get_issue_id(parse_issue_id(opts["parent"]))
     data = gql(mutation, variables)
     result = data["issueCreate"]
     if not result["success"]:
@@ -399,7 +414,8 @@ def help_issue():
     print("  --team <team_key>           Team to create the issue in (required)")
     print("  --title <title>             Issue title (required)")
     print("  --desc <description>        Issue description")
-    print("  --project <project_name>    Add issue to a project (exact name match)\n")
+    print("  --project <project_name>    Add issue to a project (exact name match)")
+    print("  --parent <issue_id>         Create as sub-issue of parent (e.g. DAST-1572)\n")
     print("Options for 'update':")
     print("  --priority <level>          Set priority (none, urgent, high, medium, low)")
 
