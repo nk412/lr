@@ -172,10 +172,55 @@ PRIORITY_MAP = {
 }
 
 
+def get_state_id(issue_identifier, state_name):
+    """Resolve a workflow state name to its ID for the issue's team."""
+    data = gql(
+        """
+        query getIssueTeamStates($issueId: String!) {
+            issue(id: $issueId) {
+                team { states { nodes { id name } } }
+            }
+        }
+        """,
+        {"issueId": issue_identifier},
+    )
+    states = data["issue"]["team"]["states"]["nodes"]
+    for s in states:
+        if s["name"].lower() == state_name.lower():
+            return s["id"]
+    valid = ", ".join(s["name"] for s in states)
+    print(f"State '{state_name}' not found. Valid states: {valid}")
+    sys.exit(1)
+
+
+def cmd_issue_comment(args):
+    if len(args) < 2:
+        print("usage: lr issue comment <issue_id or url> <body>")
+        sys.exit(1)
+    issue_id = parse_issue_id(args[0])
+    body = args[1]
+    internal_id = get_issue_id(issue_id)
+    data = gql(
+        """
+        mutation createComment($issueId: String!, $body: String!) {
+            commentCreate(input: { issueId: $issueId, body: $body }) {
+                success
+                comment { id }
+            }
+        }
+        """,
+        {"issueId": internal_id, "body": body},
+    )
+    if not data["commentCreate"]["success"]:
+        print("Failed to add comment.")
+        sys.exit(1)
+    print(f"Comment added to {issue_id}.")
+
+
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority"])
+    opts, rest = parse_args(args, ["priority", "status", "comment"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <none|urgent|high|medium|low>]")
+        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -186,27 +231,32 @@ def cmd_issue_update(args):
             print(f"Invalid priority '{opts['priority']}'. Must be one of: {', '.join(PRIORITY_MAP)}")
             sys.exit(1)
         input_fields["priority"] = PRIORITY_MAP[p]
-    if not input_fields:
-        print("Nothing to update. Provide at least one option (e.g. --priority low).")
+    if "status" in opts:
+        input_fields["stateId"] = get_state_id(issue_id, opts["status"])
+    if not input_fields and "comment" not in opts:
+        print("Nothing to update. Provide at least one option (e.g. --priority low, --status done, --comment <body>).")
         sys.exit(1)
-    variables["input"] = input_fields
-    data = gql(
-        """
-        mutation updateIssue($issueId: String!, $input: IssueUpdateInput!) {
-            issueUpdate(id: $issueId, input: $input) {
-                success
-                issue { identifier title url priority }
+    if input_fields:
+        variables["input"] = input_fields
+        data = gql(
+            """
+            mutation updateIssue($issueId: String!, $input: IssueUpdateInput!) {
+                issueUpdate(id: $issueId, input: $input) {
+                    success
+                    issue { identifier title url priority }
+                }
             }
-        }
-        """,
-        variables,
-    )
-    result = data["issueUpdate"]
-    if not result["success"]:
-        print("Failed to update issue.")
-        sys.exit(1)
-    issue = result["issue"]
-    print(f"Updated {issue['identifier']}: {issue['title']}")
+            """,
+            variables,
+        )
+        result = data["issueUpdate"]
+        if not result["success"]:
+            print("Failed to update issue.")
+            sys.exit(1)
+        issue = result["issue"]
+        print(f"Updated {issue['identifier']}: {issue['title']}")
+    if "comment" in opts:
+        cmd_issue_comment([issue_id, opts["comment"]])
 
 
 def get_project_id(name):
@@ -396,6 +446,7 @@ ISSUE_SUBCOMMANDS = {
     "list": cmd_issue_list,
     "create": cmd_issue_create,
     "update": cmd_issue_update,
+    "comment": cmd_issue_comment,
 }
 
 
@@ -418,6 +469,10 @@ def help_issue():
     print("  --parent <issue_id>         Create as sub-issue of parent (e.g. DAST-1572)\n")
     print("Options for 'update':")
     print("  --priority <level>          Set priority (none, urgent, high, medium, low)")
+    print("  --status <state>            Set workflow state (e.g. todo, done, in progress)")
+    print("  --comment <body>            Add a comment to the issue\n")
+    print("Options for 'comment':")
+    print("  lr issue comment <issue_id> <body>   Add a comment to an issue")
 
 
 def cmd_issue(args):
