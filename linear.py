@@ -7,6 +7,7 @@
 import os
 import sys
 import re
+import webbrowser
 import requests
 from tabulate import tabulate
 
@@ -193,6 +194,31 @@ def get_state_id(issue_identifier, state_name):
     sys.exit(1)
 
 
+def cmd_issue_open(args):
+    if not args:
+        print("usage: lr issue open <issue_id or url>")
+        sys.exit(1)
+    raw = args[0]
+    if raw.startswith("http://") or raw.startswith("https://"):
+        url = raw
+    else:
+        issue_id = parse_issue_id(raw)
+        data = gql(
+            """
+            query getIssueUrl($issueId: String!) {
+                issue(id: $issueId) { url }
+            }
+            """,
+            {"issueId": issue_id},
+        )
+        if not data.get("issue"):
+            print(f"Issue '{issue_id}' not found.")
+            sys.exit(1)
+        url = data["issue"]["url"]
+    print(url)
+    webbrowser.open(url)
+
+
 def cmd_issue_comment(args):
     if len(args) < 2:
         print("usage: lr issue comment <issue_id or url> <body>")
@@ -275,6 +301,72 @@ def get_project_id(name):
         print(f"Project '{name}' not found.")
         sys.exit(1)
     return projects[0]["id"]
+
+
+def parse_project_ref(raw):
+    """Parse a project URL or name. Returns (kind, value): 'slug' or 'name'."""
+    m = re.match(r"https://linear\.app/[^/]+/project/([^/?#]+)", raw)
+    if m:
+        slug = m.group(1)
+        slug_id = slug.rsplit("-", 1)[-1]
+        return ("slug", slug_id)
+    return ("name", raw)
+
+
+PROJECT_FIELDS = """
+    id name description content state url slugId
+    startDate targetDate
+    lead { name }
+    teams { nodes { key name } }
+"""
+
+
+def cmd_project_show(args):
+    if not args:
+        print("usage: lr project show <project_url or name>")
+        sys.exit(1)
+    kind, value = parse_project_ref(args[0])
+    if kind == "slug":
+        data = gql(
+            f"""
+            query findProject($slug: String!) {{
+                projects(filter: {{ slugId: {{ eq: $slug }} }}) {{
+                    nodes {{ {PROJECT_FIELDS} }}
+                }}
+            }}
+            """,
+            {"slug": value},
+        )
+    else:
+        data = gql(
+            f"""
+            query findProject($name: String!) {{
+                projects(filter: {{ name: {{ eq: $name }} }}) {{
+                    nodes {{ {PROJECT_FIELDS} }}
+                }}
+            }}
+            """,
+            {"name": value},
+        )
+    projects = data["projects"]["nodes"]
+    if not projects:
+        print("Project not found.")
+        sys.exit(1)
+    p = projects[0]
+    print(f"# {p['name']}\n")
+    print(f"**State:** {p['state']}")
+    if p.get("lead"):
+        print(f"**Lead:** {p['lead']['name']}")
+    teams = ", ".join(t["key"] for t in p["teams"]["nodes"])
+    if teams:
+        print(f"**Teams:** {teams}")
+    if p.get("startDate") or p.get("targetDate"):
+        print(f"**Dates:** {p.get('startDate') or '?'} → {p.get('targetDate') or '?'}")
+    print(f"**URL:** {p['url']}\n")
+    if p.get("description"):
+        print(f"## Summary\n{p['description']}\n")
+    if p.get("content"):
+        print(f"## Overview\n{p['content']}\n")
 
 
 def cmd_issue_list(args):
@@ -422,6 +514,7 @@ def cmd_project_list(args):
 
 PROJECT_SUBCOMMANDS = {
     "list": cmd_project_list,
+    "show": cmd_project_show,
 }
 
 
@@ -432,6 +525,7 @@ def help_project():
     print("                              List projects, optionally filtered by team and/or status")
     print("                              Status is case-insensitive (e.g. started, completed, planned)")
     print("                              --limit defaults to 100; use a higher value to fetch more")
+    print("  show <project_url or name>  Show project overview (description + content)")
 
 
 def cmd_project(args):
@@ -447,6 +541,7 @@ ISSUE_SUBCOMMANDS = {
     "create": cmd_issue_create,
     "update": cmd_issue_update,
     "comment": cmd_issue_comment,
+    "open": cmd_issue_open,
 }
 
 
@@ -454,6 +549,7 @@ def help_issue():
     print("lr issue — manage Linear issues\n")
     print("Subcommands:")
     print("  show <issue_id or url>      View issue details and comments")
+    print("  open <issue_id or url>      Open the issue in your default browser")
     print("  list [options]              List issues (defaults to your assigned issues)")
     print("  create [options]            Create a new issue")
     print("  update <issue_id> [options] Update an existing issue\n")

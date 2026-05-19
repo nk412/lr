@@ -19,6 +19,7 @@ lr issue comment <issue_id or url> <body>
 
 # Projects
 lr project list [--team <TEAM_KEY>] [--status <status>] [--limit <n>]
+lr project show <project_url or name>
 ```
 
 ## Notes
