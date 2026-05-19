@@ -14,7 +14,7 @@ description: CLI tool to interact with Linear tickets, projects and issues.
 lr issue show <issue_id or url>
 lr issue list [--team <TEAM_KEY>] [--project <project_name>]
 lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>] [--parent <issue_id>]
-lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--comment <body>]
+lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--comment <body>]
 lr issue comment <issue_id or url> <body>
 
 # Projects
@@ -32,5 +32,6 @@ lr project show <project_url or name>
 - `--limit` defaults to 100 for project list; increase to fetch more.
 - `--status` on update sets workflow state (e.g. todo, done, "in progress"). Case-insensitive.
 - `--comment` on update adds a comment in the same call.
+- `--estimate` on update accepts a t-shirt size (xs, s, m, l, xl) or an integer. T-shirt maps: xs=1, s=2, m=3, l=5, xl=7.
 - New issues are created with "Todo" status (not Triage).
 - Run `lr --help` or `lr <command>` for built-in help.

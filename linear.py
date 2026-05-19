@@ -172,6 +172,10 @@ PRIORITY_MAP = {
     "none": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4,
 }
 
+ESTIMATE_MAP = {
+    "xs": 1, "s": 2, "m": 3, "l": 5, "xl": 7,
+}
+
 
 def get_state_id(issue_identifier, state_name):
     """Resolve a workflow state name to its ID for the issue's team."""
@@ -244,9 +248,9 @@ def cmd_issue_comment(args):
 
 
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority", "status", "comment"])
+    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--comment <body>]")
+        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -259,8 +263,18 @@ def cmd_issue_update(args):
         input_fields["priority"] = PRIORITY_MAP[p]
     if "status" in opts:
         input_fields["stateId"] = get_state_id(issue_id, opts["status"])
+    if "estimate" in opts:
+        e = opts["estimate"].lower()
+        if e in ESTIMATE_MAP:
+            input_fields["estimate"] = ESTIMATE_MAP[e]
+        else:
+            try:
+                input_fields["estimate"] = int(e)
+            except ValueError:
+                print(f"Invalid estimate '{opts['estimate']}'. Must be a t-shirt size ({', '.join(ESTIMATE_MAP)}) or an integer.")
+                sys.exit(1)
     if not input_fields and "comment" not in opts:
-        print("Nothing to update. Provide at least one option (e.g. --priority low, --status done, --comment <body>).")
+        print("Nothing to update. Provide at least one option (e.g. --priority low, --status done, --estimate M, --comment <body>).")
         sys.exit(1)
     if input_fields:
         variables["input"] = input_fields
@@ -566,6 +580,7 @@ def help_issue():
     print("Options for 'update':")
     print("  --priority <level>          Set priority (none, urgent, high, medium, low)")
     print("  --status <state>            Set workflow state (e.g. todo, done, in progress)")
+    print("  --estimate <size>           Set estimate (t-shirt: xs, s, m, l, xl — or integer)")
     print("  --comment <body>            Add a comment to the issue\n")
     print("Options for 'comment':")
     print("  lr issue comment <issue_id> <body>   Add a comment to an issue")
