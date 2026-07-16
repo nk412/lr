@@ -132,12 +132,80 @@ def get_issue_id(identifier):
     return data["issue"]["id"]
 
 
+def get_user_id(handle):
+    """Resolve --assignee value to a Linear user UUID.
+
+    Accepts 'me' / '@me' for the API-key owner, or an email/displayName/name.
+    Email match is exact; name match is case-insensitive substring across
+    displayName and name (errors if ambiguous).
+    """
+    if handle.lower() in ("me", "@me"):
+        data = gql("query viewer { viewer { id name } }")
+        return data["viewer"]["id"]
+    data = gql(
+        """
+        query findUser($q: String!) {
+            users(filter: { or: [
+                { email: { eq: $q } },
+                { displayName: { containsIgnoreCase: $q } },
+                { name: { containsIgnoreCase: $q } }
+            ] }) {
+                nodes { id email displayName name }
+            }
+        }
+        """,
+        {"q": handle},
+    )
+    users = data["users"]["nodes"]
+    if not users:
+        print(f"User '{handle}' not found.")
+        sys.exit(1)
+    # Prefer exact email match, then exact displayName, then unique substring.
+    exact_email = [u for u in users if u.get("email", "").lower() == handle.lower()]
+    if exact_email:
+        return exact_email[0]["id"]
+    exact_name = [u for u in users if handle.lower() in (
+        (u.get("displayName") or "").lower(), (u.get("name") or "").lower()
+    )]
+    if len(exact_name) == 1:
+        return exact_name[0]["id"]
+    if len(users) == 1:
+        return users[0]["id"]
+    listing = ", ".join(f"{u['displayName'] or u['name']} <{u.get('email','')}>" for u in users[:5])
+    print(f"User '{handle}' is ambiguous. Matches: {listing}")
+    sys.exit(1)
+
+
+def get_milestone_id(project_id, name):
+    """Resolve a milestone name (case-insensitive) to its ID within a project."""
+    data = gql(
+        """
+        query projectMilestones($projectId: String!) {
+            project(id: $projectId) {
+                projectMilestones(first: 50) { nodes { id name } }
+            }
+        }
+        """,
+        {"projectId": project_id},
+    )
+    milestones = data["project"]["projectMilestones"]["nodes"]
+    for m in milestones:
+        if m["name"].lower() == name.lower():
+            return m["id"]
+    valid = ", ".join(m["name"] for m in milestones) or "(none)"
+    print(f"Milestone '{name}' not found in project. Valid milestones: {valid}")
+    sys.exit(1)
+
+
 def cmd_issue_create(args):
-    opts, _ = parse_args(args, ["team", "title", "desc", "project", "parent"])
+    opts, _ = parse_args(args, ["team", "title", "desc", "project", "parent", "assignee", "milestone"])
     team_key = opts.get("team")
     title = opts.get("title")
     if not team_key or not title:
-        print("usage: lr issue create --team <team> --title <title> [--desc <description>] [--project <project_name>] [--parent <issue_id>]")
+        print("usage: lr issue create --team <team> --title <title> [--desc <description>] [--project <project_name>] [--milestone <name>] [--parent <issue_id>] [--assignee <name|email|me>]")
+        sys.exit(1)
+    if opts.get("milestone") and not opts.get("project"):
+        print("--milestone requires --project.")
         sys.exit(1)
     team_id = get_team_id(team_key)
     variables = {"teamId": team_id, "title": title}
@@ -145,8 +213,8 @@ def cmd_issue_create(args):
     if todo_id:
         variables["stateId"] = todo_id
     mutation = """
-        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String, $stateId: String, $parentId: String) {
-            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId, stateId: $stateId, parentId: $parentId }) {
+        mutation createIssue($teamId: String!, $title: String!, $desc: String, $projectId: String, $stateId: String, $parentId: String, $assigneeId: String, $projectMilestoneId: String) {
+            issueCreate(input: { teamId: $teamId, title: $title, description: $desc, projectId: $projectId, stateId: $stateId, parentId: $parentId, assigneeId: $assigneeId, projectMilestoneId: $projectMilestoneId }) {
                 success
                 issue { identifier title url }
             }
@@ -156,8 +224,12 @@ def cmd_issue_create(args):
         variables["desc"] = opts["desc"]
     if opts.get("project"):
         variables["projectId"] = get_project_id(opts["project"])
+        if opts.get("milestone"):
+            variables["projectMilestoneId"] = get_milestone_id(variables["projectId"], opts["milestone"])
     if opts.get("parent"):
         variables["parentId"] = get_issue_id(parse_issue_id(opts["parent"]))
+    if opts.get("assignee"):
+        variables["assigneeId"] = get_user_id(opts["assignee"])
     data = gql(mutation, variables)
     result = data["issueCreate"]
     if not result["success"]:
@@ -247,10 +319,58 @@ def cmd_issue_comment(args):
     print(f"Comment added to {issue_id}.")
 
 
+def resolve_label_change(issue_id, names_csv, remove=False):
+    """Return a labelIds list reflecting the issue's current labels with the
+    given comma-separated names added (default) or removed. Name resolution for
+    additions prefers labels scoped to the issue's team, falling back to a
+    workspace-wide lookup; removals match against the issue's current labels by
+    name (case-insensitive)."""
+    data = gql(
+        """
+        query getIssueLabels($issueId: String!) {
+            issue(id: $issueId) {
+                labels { nodes { id name } }
+                team { labels { nodes { id name } } }
+            }
+        }
+        """,
+        {"issueId": issue_id},
+    )
+    issue = data["issue"]
+    current = {n["id"]: n["name"] for n in issue["labels"]["nodes"]}
+    team_labels = issue["team"]["labels"]["nodes"]
+    target_ids = set(current)
+    for raw in [n.strip() for n in names_csv.split(",") if n.strip()]:
+        if remove:
+            matched = [lid for lid, name in current.items() if name.lower() == raw.lower()]
+            if not matched:
+                print(f"Label '{raw}' is not on the issue.")
+                sys.exit(1)
+            target_ids -= set(matched)
+            continue
+        match = [l for l in team_labels if l["name"].lower() == raw.lower()]
+        if not match:
+            match = gql(
+                """
+                query findLabel($name: String!) {
+                    issueLabels(filter: { name: { eqIgnoreCase: $name } }) {
+                        nodes { id name }
+                    }
+                }
+                """,
+                {"name": raw},
+            )["issueLabels"]["nodes"]
+        if not match:
+            print(f"Label '{raw}' not found.")
+            sys.exit(1)
+        target_ids.add(match[0]["id"])
+    return list(target_ids)
+
+
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate"])
+    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "milestone"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--comment <body>]")
+        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -273,8 +393,46 @@ def cmd_issue_update(args):
             except ValueError:
                 print(f"Invalid estimate '{opts['estimate']}'. Must be a t-shirt size ({', '.join(ESTIMATE_MAP)}) or an integer.")
                 sys.exit(1)
+    if "assignee" in opts:
+        input_fields["assigneeId"] = get_user_id(opts["assignee"])
+    if "milestone" in opts:
+        proj = gql(
+            """
+            query getIssueProject($issueId: String!) {
+                issue(id: $issueId) { project { id } }
+            }
+            """,
+            {"issueId": issue_id},
+        )["issue"].get("project")
+        if not proj:
+            print("Issue is not in a project; cannot set a milestone.")
+            sys.exit(1)
+        input_fields["projectMilestoneId"] = get_milestone_id(proj["id"], opts["milestone"])
+    if "label" in opts and "remove-label" in opts:
+        print("--label and --remove-label are mutually exclusive.")
+        sys.exit(1)
+    if "label" in opts:
+        input_fields["labelIds"] = resolve_label_change(issue_id, opts["label"])
+    if "remove-label" in opts:
+        input_fields["labelIds"] = resolve_label_change(issue_id, opts["remove-label"], remove=True)
+    if "desc" in opts and "append-desc" in opts:
+        print("--desc and --append-desc are mutually exclusive.")
+        sys.exit(1)
+    if "desc" in opts:
+        input_fields["description"] = opts["desc"]
+    if "append-desc" in opts:
+        current = gql(
+            """
+            query getDesc($issueId: String!) {
+                issue(id: $issueId) { description }
+            }
+            """,
+            {"issueId": issue_id},
+        )["issue"]["description"] or ""
+        sep = "\n\n" if current else ""
+        input_fields["description"] = current + sep + opts["append-desc"]
     if not input_fields and "comment" not in opts:
-        print("Nothing to update. Provide at least one option (e.g. --priority low, --status done, --estimate M, --comment <body>).")
+        print("Nothing to update. Provide at least one option (e.g. --priority low, --status done, --estimate M, --desc <body>, --comment <body>).")
         sys.exit(1)
     if input_fields:
         variables["input"] = input_fields
@@ -299,20 +457,68 @@ def cmd_issue_update(args):
         cmd_issue_comment([issue_id, opts["comment"]])
 
 
-def get_project_id(name):
-    data = gql(
-        """
-        query findProject($name: String!) {
-            projects(filter: { name: { eq: $name } }) {
-                nodes { id name }
+def cmd_issue_link(args):
+    opts, rest = parse_args(args, ["blocks", "blocked-by", "related", "duplicate"])
+    if not rest:
+        print("usage: lr issue link <issue_id or url> [--blocks <id[,id,...]>] [--blocked-by <id[,id,...]>] [--related <id[,id,...]>] [--duplicate <id>]")
+        sys.exit(1)
+    if not any(k in opts for k in ("blocks", "blocked-by", "related", "duplicate")):
+        print("Provide at least one of --blocks, --blocked-by, --related, --duplicate.")
+        sys.exit(1)
+    issue_id = parse_issue_id(rest[0])
+    source_uuid = get_issue_id(issue_id)
+
+    def create_relation(src_uuid, dst_uuid, rel_type):
+        data = gql(
+            """
+            mutation linkIssues($input: IssueRelationCreateInput!) {
+                issueRelationCreate(input: $input) {
+                    success
+                    issueRelation { id type }
+                }
             }
-        }
+            """,
+            {"input": {"issueId": src_uuid, "relatedIssueId": dst_uuid, "type": rel_type}},
+        )
+        return data["issueRelationCreate"]["success"]
+
+    # Linear has no "blocked_by" type; we reverse a "blocks" relation instead.
+    plan = [
+        ("blocks", "blocks", False),
+        ("blocked-by", "blocks", True),
+        ("related", "related", False),
+        ("duplicate", "duplicate", False),
+    ]
+    for label, rel_type, reverse in plan:
+        if label not in opts:
+            continue
+        for target in [t.strip() for t in opts[label].split(",") if t.strip()]:
+            target_id = parse_issue_id(target)
+            target_uuid = get_issue_id(target_id)
+            src, dst = (target_uuid, source_uuid) if reverse else (source_uuid, target_uuid)
+            if not create_relation(src, dst, rel_type):
+                print(f"Failed to link {issue_id} {label} {target_id}")
+                sys.exit(1)
+            print(f"Linked {issue_id} {label} {target_id}")
+
+
+def get_project_id(ref):
+    """Resolve a project name or URL to its internal UUID."""
+    kind, value = parse_project_ref(ref)
+    field = "slugId" if kind == "slug" else "name"
+    data = gql(
+        f"""
+        query findProject($value: String!) {{
+            projects(filter: {{ {field}: {{ eq: $value }} }}) {{
+                nodes {{ id name }}
+            }}
+        }}
         """,
-        {"name": name},
+        {"value": value},
     )
     projects = data["projects"]["nodes"]
     if not projects:
-        print(f"Project '{name}' not found.")
+        print(f"Project '{ref}' not found.")
         sys.exit(1)
     return projects[0]["id"]
 
@@ -383,10 +589,63 @@ def cmd_project_show(args):
         print(f"## Overview\n{p['content']}\n")
 
 
+def cmd_project_milestones(args):
+    if not args:
+        print("usage: lr project milestones <project_url or name>")
+        sys.exit(1)
+    project_id = get_project_id(args[0])
+    data = gql(
+        """
+        query projectMilestones($projectId: String!) {
+            project(id: $projectId) {
+                name
+                projectMilestones(first: 50) {
+                    nodes { id name targetDate sortOrder }
+                }
+                issues(first: 250) {
+                    nodes {
+                        projectMilestone { id }
+                        state { type }
+                    }
+                }
+            }
+        }
+        """,
+        {"projectId": project_id},
+    )
+    project = data["project"]
+    milestones = sorted(project["projectMilestones"]["nodes"], key=lambda m: m["sortOrder"])
+    if not milestones:
+        print(f"No milestones in project '{project['name']}'.")
+        return
+    total = {}
+    done = {}
+    unassigned = 0
+    for i in project["issues"]["nodes"]:
+        mid = (i.get("projectMilestone") or {}).get("id")
+        if mid is None:
+            unassigned += 1
+            continue
+        total[mid] = total.get(mid, 0) + 1
+        if i["state"]["type"] in ("completed", "canceled"):
+            done[mid] = done.get(mid, 0) + 1
+    rows = [
+        [m["name"], m.get("targetDate") or "", f"{done.get(m['id'], 0)}/{total.get(m['id'], 0)}"]
+        for m in milestones
+    ]
+    if unassigned:
+        rows.append(["(no milestone)", "", f"-/{unassigned}"])
+    print(tabulate(rows, headers=["Milestone", "Target", "Done/Issues"], tablefmt="simple"))
+
+
 def cmd_issue_list(args):
-    opts, _ = parse_args(args, ["team", "project"])
+    opts, _ = parse_args(args, ["team", "project", "milestone"])
     team = opts.get("team")
     project = opts.get("project")
+    milestone = opts.get("milestone")
+    if milestone and not project:
+        print("--milestone requires --project.")
+        sys.exit(1)
 
     if project:
         project_id = get_project_id(project)
@@ -396,12 +655,13 @@ def cmd_issue_list(args):
             query = """
                 query projectIssues($projectId: String!, $teamKey: String!) {
                     project(id: $projectId) {
-                        issues(first: 50, orderBy: updatedAt, filter: { team: { key: { eq: $teamKey } } }) {
+                        issues(first: 250, orderBy: updatedAt, filter: { team: { key: { eq: $teamKey } } }) {
                             nodes {
                                 identifier
                                 title
                                 state { name }
                                 assignee { name }
+                                projectMilestone { name }
                                 priority
                                 updatedAt
                             }
@@ -413,12 +673,13 @@ def cmd_issue_list(args):
             query = """
                 query projectIssues($projectId: String!) {
                     project(id: $projectId) {
-                        issues(first: 50, orderBy: updatedAt) {
+                        issues(first: 250, orderBy: updatedAt) {
                             nodes {
                                 identifier
                                 title
                                 state { name }
                                 assignee { name }
+                                projectMilestone { name }
                                 priority
                                 updatedAt
                             }
@@ -428,6 +689,11 @@ def cmd_issue_list(args):
             """
         data = gql(query, variables)
         issues = data["project"]["issues"]["nodes"]
+        if milestone:
+            issues = [
+                i for i in issues
+                if (i.get("projectMilestone") or {}).get("name", "").lower() == milestone.lower()
+            ]
     elif team:
         data = gql(
             """
@@ -480,11 +746,68 @@ def cmd_issue_list(args):
         print("No issues found.")
         return
     issues.sort(key=lambda i: i["updatedAt"], reverse=True)
+    if project:
+        rows = [
+            [
+                i["identifier"],
+                i["state"]["name"],
+                i["assignee"]["name"] if i.get("assignee") else "",
+                (i.get("projectMilestone") or {}).get("name", ""),
+                i["title"],
+            ]
+            for i in issues
+        ]
+        print(tabulate(rows, headers=["ID", "Status", "Assignee", "Milestone", "Title"], tablefmt="simple"))
+        return
     rows = [
         [i["identifier"], i["state"]["name"], i["assignee"]["name"] if i.get("assignee") else "", i["title"]]
         for i in issues
     ]
     print(tabulate(rows, headers=["ID", "Status", "Assignee", "Title"], tablefmt="simple"))
+
+
+def cmd_issue_search(args):
+    opts, rest = parse_args(args, ["limit"])
+    if not rest:
+        print("usage: lr issue search <term> [--limit <n>]")
+        sys.exit(1)
+    term = " ".join(rest)
+    limit = int(opts.get("limit") or 25)
+    data = gql(
+        """
+        query search($term: String!, $first: Int!) {
+            searchIssues(term: $term, first: $first) {
+                nodes {
+                    identifier
+                    title
+                    state { name }
+                    team { key }
+                    creator { name }
+                    assignee { name }
+                    updatedAt
+                }
+            }
+        }
+        """,
+        {"term": term, "first": limit},
+    )
+    issues = data["searchIssues"]["nodes"]
+    if not issues:
+        print("No issues found.")
+        return
+    issues.sort(key=lambda i: i["updatedAt"], reverse=True)
+    rows = [
+        [
+            i["identifier"],
+            i["team"]["key"],
+            i["state"]["name"],
+            (i.get("creator") or {}).get("name", ""),
+            (i.get("assignee") or {}).get("name", ""),
+            i["title"],
+        ]
+        for i in issues
+    ]
+    print(tabulate(rows, headers=["ID", "Team", "Status", "Creator", "Assignee", "Title"], tablefmt="simple"))
 
 
 def cmd_project_list(args):
@@ -529,6 +852,7 @@ def cmd_project_list(args):
 PROJECT_SUBCOMMANDS = {
     "list": cmd_project_list,
     "show": cmd_project_show,
+    "milestones": cmd_project_milestones,
 }
 
 
@@ -540,6 +864,8 @@ def help_project():
     print("                              Status is case-insensitive (e.g. started, completed, planned)")
     print("                              --limit defaults to 100; use a higher value to fetch more")
     print("  show <project_url or name>  Show project overview (description + content)")
+    print("  milestones <project_url or name>")
+    print("                              List a project's milestones with done/total issue counts")
 
 
 def cmd_project(args):
@@ -552,10 +878,12 @@ def cmd_project(args):
 ISSUE_SUBCOMMANDS = {
     "show": cmd_issue_view,
     "list": cmd_issue_list,
+    "search": cmd_issue_search,
     "create": cmd_issue_create,
     "update": cmd_issue_update,
     "comment": cmd_issue_comment,
     "open": cmd_issue_open,
+    "link": cmd_issue_link,
 }
 
 
@@ -565,25 +893,44 @@ def help_issue():
     print("  show <issue_id or url>      View issue details and comments")
     print("  open <issue_id or url>      Open the issue in your default browser")
     print("  list [options]              List issues (defaults to your assigned issues)")
+    print("  search <term> [options]     Full-text search across all issues")
     print("  create [options]            Create a new issue")
-    print("  update <issue_id> [options] Update an existing issue\n")
+    print("  update <issue_id> [options] Update an existing issue")
+    print("  link <issue_id> [options]   Link an issue to other issues (blocks / blocked-by / related / duplicate)\n")
     print("Options for 'list':")
     print("  --team <team_key>           Filter by team key (e.g. IDO, DAST)")
-    print("  --project <project_name>    Filter by project name (exact match)")
-    print("                              Can combine --team and --project\n")
+    print("  --project <name or url>     Filter by project (exact name match, or project URL)")
+    print("                              Can combine --team and --project")
+    print("  --milestone <name>          Filter by project milestone (requires --project;")
+    print("                              case-insensitive exact name match)\n")
+    print("Options for 'search':")
+    print("  --limit <n>                 Max results to return (default 25)\n")
     print("Options for 'create':")
     print("  --team <team_key>           Team to create the issue in (required)")
     print("  --title <title>             Issue title (required)")
     print("  --desc <description>        Issue description")
-    print("  --project <project_name>    Add issue to a project (exact name match)")
-    print("  --parent <issue_id>         Create as sub-issue of parent (e.g. DAST-1572)\n")
+    print("  --project <name or url>     Add issue to a project (exact name match, or URL)")
+    print("  --milestone <name>          Put issue on a project milestone (requires --project)")
+    print("  --parent <issue_id>         Create as sub-issue of parent (e.g. DAST-1572)")
+    print("  --assignee <handle>         Assignee — name, email, or 'me'\n")
     print("Options for 'update':")
     print("  --priority <level>          Set priority (none, urgent, high, medium, low)")
     print("  --status <state>            Set workflow state (e.g. todo, done, in progress)")
     print("  --estimate <size>           Set estimate (t-shirt: xs, s, m, l, xl — or integer)")
+    print("  --assignee <handle>         Set assignee — name, email, or 'me'")
+    print("  --label <name[,name,...]>   Add label(s) by name (additive; keeps existing)")
+    print("  --remove-label <name[,...]> Remove label(s) by name from the issue")
+    print("  --milestone <name>          Set the project milestone (issue must be in a project)")
+    print("  --desc <body>               Replace the issue description")
+    print("  --append-desc <body>        Append to the existing description (separated by blank line)")
     print("  --comment <body>            Add a comment to the issue\n")
     print("Options for 'comment':")
-    print("  lr issue comment <issue_id> <body>   Add a comment to an issue")
+    print("  lr issue comment <issue_id> <body>   Add a comment to an issue\n")
+    print("Options for 'link':")
+    print("  --blocks <id[,id,...]>      Mark this issue as blocking the given issue(s)")
+    print("  --blocked-by <id[,id,...]>  Mark this issue as blocked by the given issue(s)")
+    print("  --related <id[,id,...]>     Add 'related' link to the given issue(s)")
+    print("  --duplicate <id>            Mark this issue as duplicate of another")
 
 
 def cmd_issue(args):
