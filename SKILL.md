@@ -15,7 +15,7 @@ lr issue show <issue_id or url>
 lr issue list [--team <TEAM_KEY>] [--project <project_name or url>] [--milestone <name>]
 lr issue search <term> [--limit <n>]
 lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>] [--milestone <name>] [--parent <issue_id>]
-lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--label <name[,name,...]>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]
+lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--label <name[,name,...]>] [--project <project_name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]
 lr issue comment <issue_id or url> <body>
 lr issue link <issue_id or url> [--blocks <id[,id,...]>] [--blocked-by <id[,id,...]>] [--related <id[,id,...]>] [--duplicate <id>]
 
@@ -23,6 +23,7 @@ lr issue link <issue_id or url> [--blocks <id[,id,...]>] [--blocked-by <id[,id,.
 lr project list [--team <TEAM_KEY>] [--status <status>] [--limit <n>]
 lr project show <project_url or name>
 lr project milestones <project_url or name>
+lr project add-milestone <project_url or name> <milestone_name> [--target <YYYY-MM-DD>]
 ```
 
 ## Notes
@@ -32,7 +33,11 @@ lr project milestones <project_url or name>
 - `--project` matches by exact project name; a full Linear project URL also works.
 - `--milestone` on `issue list` filters by project milestone name (case-insensitive; requires `--project`). Project listings include a Milestone column.
 - `project milestones` lists a project's milestones with target dates and done/total issue counts.
+- `project add-milestone` creates a milestone in a project; `--target` sets an optional target date.
+- Project listings and `project show` display the workspace's custom status name (e.g. Maintenance) rather than the legacy state category; `--status` filtering matches either.
 - `--milestone` on `issue create` puts the new issue on a project milestone (requires `--project`); on `issue update` it sets the milestone of an issue already in a project. Name match is case-insensitive.
+- `--project` on `issue update` moves the issue to that project; combine with `--milestone` to also place it on a milestone of the new project.
+- `issue show` displays status, assignee, and project/milestone above the description.
 - `--parent` creates a sub-issue under the given parent.
 - `--status` is case-insensitive (e.g. started, completed, planned).
 - `--limit` defaults to 100 for project list, 25 for issue search; increase to fetch more.

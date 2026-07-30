@@ -84,6 +84,10 @@ def cmd_issue_view(args):
             issue(id: $issueId) {
                 title
                 description
+                state { name }
+                assignee { name }
+                project { name }
+                projectMilestone { name }
                 comments { nodes { body user { name } createdAt } }
             }
         }
@@ -92,6 +96,14 @@ def cmd_issue_view(args):
     )
     issue = data["issue"]
     print(f"# {issue['title']}\n")
+    print(f"**Status:** {issue['state']['name']}")
+    if issue.get("assignee"):
+        print(f"**Assignee:** {issue['assignee']['name']}")
+    if issue.get("project"):
+        milestone = issue.get("projectMilestone")
+        suffix = f" / {milestone['name']}" if milestone else ""
+        print(f"**Project:** {issue['project']['name']}{suffix}")
+    print()
     if issue["description"]:
         print(f"## Description\n{issue['description']}\n")
     comments = list(reversed(issue["comments"]["nodes"]))
@@ -368,9 +380,9 @@ def resolve_label_change(issue_id, names_csv, remove=False):
 
 
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "milestone"])
+    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "project", "milestone"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
+        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -395,19 +407,25 @@ def cmd_issue_update(args):
                 sys.exit(1)
     if "assignee" in opts:
         input_fields["assigneeId"] = get_user_id(opts["assignee"])
+    if "project" in opts:
+        input_fields["projectId"] = get_project_id(opts["project"])
     if "milestone" in opts:
-        proj = gql(
-            """
-            query getIssueProject($issueId: String!) {
-                issue(id: $issueId) { project { id } }
-            }
-            """,
-            {"issueId": issue_id},
-        )["issue"].get("project")
-        if not proj:
-            print("Issue is not in a project; cannot set a milestone.")
-            sys.exit(1)
-        input_fields["projectMilestoneId"] = get_milestone_id(proj["id"], opts["milestone"])
+        if "project" in opts:
+            project_id = input_fields["projectId"]
+        else:
+            proj = gql(
+                """
+                query getIssueProject($issueId: String!) {
+                    issue(id: $issueId) { project { id } }
+                }
+                """,
+                {"issueId": issue_id},
+            )["issue"].get("project")
+            if not proj:
+                print("Issue is not in a project; cannot set a milestone.")
+                sys.exit(1)
+            project_id = proj["id"]
+        input_fields["projectMilestoneId"] = get_milestone_id(project_id, opts["milestone"])
     if "label" in opts and "remove-label" in opts:
         print("--label and --remove-label are mutually exclusive.")
         sys.exit(1)
@@ -535,10 +553,16 @@ def parse_project_ref(raw):
 
 PROJECT_FIELDS = """
     id name description content state url slugId
+    status { name }
     startDate targetDate
     lead { name }
     teams { nodes { key name } }
 """
+
+
+def project_status(p):
+    """Prefer the workspace's custom status name over the legacy state category."""
+    return (p.get("status") or {}).get("name") or p["state"]
 
 
 def cmd_project_show(args):
@@ -574,7 +598,7 @@ def cmd_project_show(args):
         sys.exit(1)
     p = projects[0]
     print(f"# {p['name']}\n")
-    print(f"**State:** {p['state']}")
+    print(f"**State:** {project_status(p)}")
     if p.get("lead"):
         print(f"**Lead:** {p['lead']['name']}")
     teams = ", ".join(t["key"] for t in p["teams"]["nodes"])
@@ -636,6 +660,35 @@ def cmd_project_milestones(args):
     if unassigned:
         rows.append(["(no milestone)", "", f"-/{unassigned}"])
     print(tabulate(rows, headers=["Milestone", "Target", "Done/Issues"], tablefmt="simple"))
+
+
+def cmd_project_add_milestone(args):
+    opts, rest = parse_args(args, ["target"])
+    if len(rest) < 2:
+        print("usage: lr project add-milestone <project_url or name> <milestone_name> [--target <YYYY-MM-DD>]")
+        sys.exit(1)
+    project_id = get_project_id(rest[0])
+    input_fields = {"projectId": project_id, "name": rest[1]}
+    if opts.get("target"):
+        input_fields["targetDate"] = opts["target"]
+    data = gql(
+        """
+        mutation createMilestone($input: ProjectMilestoneCreateInput!) {
+            projectMilestoneCreate(input: $input) {
+                success
+                projectMilestone { name targetDate }
+            }
+        }
+        """,
+        {"input": input_fields},
+    )
+    result = data["projectMilestoneCreate"]
+    if not result["success"]:
+        print("Failed to create milestone.")
+        sys.exit(1)
+    m = result["projectMilestone"]
+    target = f" (target {m['targetDate']})" if m.get("targetDate") else ""
+    print(f"Created milestone '{m['name']}'{target}")
 
 
 def cmd_issue_list(args):
@@ -823,7 +876,7 @@ def cmd_project_list(args):
             """
             query listProjects($cursor: String, $first: Int!) {
                 projects(first: $first, after: $cursor, orderBy: updatedAt, includeArchived: true) {
-                    nodes { id name state teams { nodes { key } } }
+                    nodes { id name state status { name } teams { nodes { key } } }
                     pageInfo { hasNextPage endCursor }
                 }
             }
@@ -838,12 +891,15 @@ def cmd_project_list(args):
     if team:
         projects = [p for p in projects if any(t["key"] == team for t in p["teams"]["nodes"])]
     if status:
-        projects = [p for p in projects if p["state"].lower() == status.lower()]
+        projects = [
+            p for p in projects
+            if status.lower() in (p["state"].lower(), project_status(p).lower())
+        ]
     if not projects:
         print("No projects found.")
         return
     rows = [
-        [p["name"], p["state"], ", ".join(t["key"] for t in p["teams"]["nodes"])]
+        [p["name"], project_status(p), ", ".join(t["key"] for t in p["teams"]["nodes"])]
         for p in projects
     ]
     print(tabulate(rows, headers=["Name", "State", "Teams"], tablefmt="simple"))
@@ -853,6 +909,7 @@ PROJECT_SUBCOMMANDS = {
     "list": cmd_project_list,
     "show": cmd_project_show,
     "milestones": cmd_project_milestones,
+    "add-milestone": cmd_project_add_milestone,
 }
 
 
@@ -866,6 +923,8 @@ def help_project():
     print("  show <project_url or name>  Show project overview (description + content)")
     print("  milestones <project_url or name>")
     print("                              List a project's milestones with done/total issue counts")
+    print("  add-milestone <project_url or name> <milestone_name> [--target <YYYY-MM-DD>]")
+    print("                              Create a milestone in a project")
 
 
 def cmd_project(args):
@@ -920,6 +979,7 @@ def help_issue():
     print("  --assignee <handle>         Set assignee — name, email, or 'me'")
     print("  --label <name[,name,...]>   Add label(s) by name (additive; keeps existing)")
     print("  --remove-label <name[,...]> Remove label(s) by name from the issue")
+    print("  --project <name or url>     Move the issue to a project (exact name match, or URL)")
     print("  --milestone <name>          Set the project milestone (issue must be in a project)")
     print("  --desc <body>               Replace the issue description")
     print("  --append-desc <body>        Append to the existing description (separated by blank line)")
