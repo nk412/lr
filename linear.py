@@ -331,6 +331,50 @@ def cmd_issue_comment(args):
     print(f"Comment added to {issue_id}.")
 
 
+def cmd_issue_edit_comment(args):
+    """Replace the body of your most recent comment on an issue."""
+    if len(args) < 2:
+        print("usage: lr issue edit-comment <issue_id or url> <body>")
+        sys.exit(1)
+    issue_id = parse_issue_id(args[0])
+    body = args[1]
+    data = gql(
+        """
+        query myComments($issueId: String!) {
+            viewer { id }
+            issue(id: $issueId) {
+                comments(first: 250) { nodes { id createdAt user { id } } }
+            }
+        }
+        """,
+        {"issueId": issue_id},
+    )
+    if not data.get("issue"):
+        print(f"Issue '{issue_id}' not found.")
+        sys.exit(1)
+    viewer_id = data["viewer"]["id"]
+    mine = [
+        c for c in data["issue"]["comments"]["nodes"]
+        if c.get("user") and c["user"]["id"] == viewer_id
+    ]
+    if not mine:
+        print(f"You have no comments on {issue_id}.")
+        sys.exit(1)
+    latest = max(mine, key=lambda c: c["createdAt"])
+    data = gql(
+        """
+        mutation updateComment($id: String!, $body: String!) {
+            commentUpdate(id: $id, input: { body: $body }) { success }
+        }
+        """,
+        {"id": latest["id"], "body": body},
+    )
+    if not data["commentUpdate"]["success"]:
+        print("Failed to update comment.")
+        sys.exit(1)
+    print(f"Updated your latest comment on {issue_id}.")
+
+
 def resolve_label_change(issue_id, names_csv, remove=False):
     """Return a labelIds list reflecting the issue's current labels with the
     given comma-separated names added (default) or removed. Name resolution for
@@ -986,6 +1030,7 @@ ISSUE_SUBCOMMANDS = {
     "create": cmd_issue_create,
     "update": cmd_issue_update,
     "comment": cmd_issue_comment,
+    "edit-comment": cmd_issue_edit_comment,
     "open": cmd_issue_open,
     "link": cmd_issue_link,
 }
@@ -1000,6 +1045,7 @@ def help_issue():
     print("  search <term> [options]     Full-text search across all issues")
     print("  create [options]            Create a new issue")
     print("  update <issue_id> [options] Update an existing issue")
+    print("  edit-comment <issue_id> <body>  Replace the body of your latest comment on the issue")
     print("  link <issue_id> [options]   Link an issue to other issues (blocks / blocked-by / related / duplicate)\n")
     print("Options for 'list':")
     print("  --team <team_key>           Filter by team key (e.g. IDO, DAST)")

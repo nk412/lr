@@ -17,6 +17,7 @@ lr issue search <term> [--limit <n>]
 lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>] [--milestone <name>] [--parent <issue_id>] [--assignee <name|email|me>]
 lr issue update <issue_id or url> [--team <TEAM_KEY>] [--title <title>] [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <project_name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]
 lr issue comment <issue_id or url> <body>
+lr issue edit-comment <issue_id or url> <body>
 lr issue link <issue_id or url> [--blocks <id[,id,...]>] [--blocked-by <id[,id,...]>] [--related <id[,id,...]>] [--duplicate <id>]
 
 # Projects
@@ -46,6 +47,7 @@ lr project updates <project_url or name> [--limit <n>]
 - `issue search` runs a full-text search across all teams (title + body). Shows team and creator columns to help disambiguate.
 - `--status` on update sets workflow state (e.g. todo, done, "in progress"). Case-insensitive.
 - `--comment` on update adds a comment in the same call.
+- `issue edit-comment` replaces the body of your most recent comment on the issue (only your own comments).
 - `--estimate` on update accepts a t-shirt size (xs, s, m, l, xl) or an integer. T-shirt maps: xs=1, s=2, m=3, l=5, xl=7.
 - `--desc` on update replaces the description; `--append-desc` appends to it (separated by a blank line). Mutually exclusive.
 - `--label` on update adds label(s) by name. Additive (keeps existing labels) and accepts a comma-separated list. Resolves names within the issue's team first, then workspace-wide.
