@@ -695,6 +695,44 @@ def cmd_project_add_milestone(args):
     print(f"Created milestone '{m['name']}'{target}")
 
 
+HEALTH_LABELS = {"onTrack": "On track", "atRisk": "At risk", "offTrack": "Off track"}
+
+
+def cmd_project_updates(args):
+    opts, rest = parse_args(args, ["limit"])
+    if not rest:
+        print("usage: lr project updates <project_url or name> [--limit <n>]")
+        sys.exit(1)
+    limit = int(opts.get("limit") or 5)
+    project_id = get_project_id(rest[0])
+    data = gql(
+        """
+        query projectUpdates($projectId: String!) {
+            project(id: $projectId) {
+                name
+                projectUpdates(first: 50) {
+                    nodes { createdAt health body user { name } }
+                }
+            }
+        }
+        """,
+        {"projectId": project_id},
+    )
+    project = data["project"]
+    updates = sorted(
+        project["projectUpdates"]["nodes"], key=lambda u: u["createdAt"], reverse=True
+    )
+    if not updates:
+        print(f"No status updates in project '{project['name']}'.")
+        return
+    for u in updates[:limit]:
+        date = u["createdAt"][:10]
+        health = HEALTH_LABELS.get(u.get("health"), u.get("health") or "")
+        author = (u.get("user") or {}).get("name", "?")
+        print(f"## {date} — {health} — {author}\n")
+        print(f"{u['body'].strip()}\n")
+
+
 def cmd_issue_list(args):
     opts, _ = parse_args(args, ["team", "project", "milestone"])
     team = opts.get("team")
@@ -914,6 +952,7 @@ PROJECT_SUBCOMMANDS = {
     "show": cmd_project_show,
     "milestones": cmd_project_milestones,
     "add-milestone": cmd_project_add_milestone,
+    "updates": cmd_project_updates,
 }
 
 
@@ -929,6 +968,8 @@ def help_project():
     print("                              List a project's milestones with done/total issue counts")
     print("  add-milestone <project_url or name> <milestone_name> [--target <YYYY-MM-DD>]")
     print("                              Create a milestone in a project")
+    print("  updates <project_url or name> [--limit <n>]")
+    print("                              Show a project's status updates, newest first (default 5)")
 
 
 def cmd_project(args):

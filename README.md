@@ -58,4 +58,7 @@ lr project list --status started --limit 20
 
 # Show a project overview
 lr project show "Q1 Roadmap"
+
+# Show a project's status updates, newest first (--limit defaults to 5)
+lr project updates "Q1 Roadmap" --limit 3
 ```
