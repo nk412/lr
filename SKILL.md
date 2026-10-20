@@ -14,8 +14,8 @@ description: CLI tool to interact with Linear tickets, projects and issues.
 lr issue show <issue_id or url>
 lr issue list [--team <TEAM_KEY>] [--project <project_name or url>] [--milestone <name>]
 lr issue search <term> [--limit <n>]
-lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>] [--milestone <name>] [--parent <issue_id>]
-lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--label <name[,name,...]>] [--project <project_name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]
+lr issue create --team <TEAM_KEY> --title <title> [--desc <description>] [--project <project_name>] [--milestone <name>] [--parent <issue_id>] [--assignee <name|email|me>]
+lr issue update <issue_id or url> [--team <TEAM_KEY>] [--title <title>] [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <project_name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]
 lr issue comment <issue_id or url> <body>
 lr issue link <issue_id or url> [--blocks <id[,id,...]>] [--blocked-by <id[,id,...]>] [--related <id[,id,...]>] [--duplicate <id>]
 

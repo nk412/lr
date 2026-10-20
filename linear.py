@@ -380,9 +380,9 @@ def resolve_label_change(issue_id, names_csv, remove=False):
 
 
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "project", "milestone"])
+    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "project", "milestone", "team", "title"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
+        print("usage: lr issue update <issue_id or url> [--team <TEAM_KEY>] [--title <title>] [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -407,6 +407,10 @@ def cmd_issue_update(args):
                 sys.exit(1)
     if "assignee" in opts:
         input_fields["assigneeId"] = get_user_id(opts["assignee"])
+    if "team" in opts:
+        input_fields["teamId"] = get_team_id(opts["team"])
+    if "title" in opts:
+        input_fields["title"] = opts["title"]
     if "project" in opts:
         input_fields["projectId"] = get_project_id(opts["project"])
     if "milestone" in opts:
