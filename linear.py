@@ -331,6 +331,50 @@ def cmd_issue_comment(args):
     print(f"Comment added to {issue_id}.")
 
 
+def cmd_issue_edit_comment(args):
+    """Replace the body of your most recent comment on an issue."""
+    if len(args) < 2:
+        print("usage: lr issue edit-comment <issue_id or url> <body>")
+        sys.exit(1)
+    issue_id = parse_issue_id(args[0])
+    body = args[1]
+    data = gql(
+        """
+        query myComments($issueId: String!) {
+            viewer { id }
+            issue(id: $issueId) {
+                comments(first: 250) { nodes { id createdAt user { id } } }
+            }
+        }
+        """,
+        {"issueId": issue_id},
+    )
+    if not data.get("issue"):
+        print(f"Issue '{issue_id}' not found.")
+        sys.exit(1)
+    viewer_id = data["viewer"]["id"]
+    mine = [
+        c for c in data["issue"]["comments"]["nodes"]
+        if c.get("user") and c["user"]["id"] == viewer_id
+    ]
+    if not mine:
+        print(f"You have no comments on {issue_id}.")
+        sys.exit(1)
+    latest = max(mine, key=lambda c: c["createdAt"])
+    data = gql(
+        """
+        mutation updateComment($id: String!, $body: String!) {
+            commentUpdate(id: $id, input: { body: $body }) { success }
+        }
+        """,
+        {"id": latest["id"], "body": body},
+    )
+    if not data["commentUpdate"]["success"]:
+        print("Failed to update comment.")
+        sys.exit(1)
+    print(f"Updated your latest comment on {issue_id}.")
+
+
 def resolve_label_change(issue_id, names_csv, remove=False):
     """Return a labelIds list reflecting the issue's current labels with the
     given comma-separated names added (default) or removed. Name resolution for
@@ -380,9 +424,9 @@ def resolve_label_change(issue_id, names_csv, remove=False):
 
 
 def cmd_issue_update(args):
-    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "project", "milestone"])
+    opts, rest = parse_args(args, ["priority", "status", "comment", "estimate", "assignee", "desc", "append-desc", "label", "remove-label", "project", "milestone", "team", "title"])
     if not rest:
-        print("usage: lr issue update <issue_id or url> [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
+        print("usage: lr issue update <issue_id or url> [--team <TEAM_KEY>] [--title <title>] [--priority <level>] [--status <state>] [--estimate <size>] [--assignee <name|email|me>] [--label <name[,name,...]>] [--remove-label <name[,name,...]>] [--project <name or url>] [--milestone <name>] [--desc <body>] [--append-desc <body>] [--comment <body>]")
         sys.exit(1)
     issue_id = parse_issue_id(rest[0])
     variables = {"issueId": issue_id}
@@ -407,6 +451,10 @@ def cmd_issue_update(args):
                 sys.exit(1)
     if "assignee" in opts:
         input_fields["assigneeId"] = get_user_id(opts["assignee"])
+    if "team" in opts:
+        input_fields["teamId"] = get_team_id(opts["team"])
+    if "title" in opts:
+        input_fields["title"] = opts["title"]
     if "project" in opts:
         input_fields["projectId"] = get_project_id(opts["project"])
     if "milestone" in opts:
@@ -691,6 +739,44 @@ def cmd_project_add_milestone(args):
     print(f"Created milestone '{m['name']}'{target}")
 
 
+HEALTH_LABELS = {"onTrack": "On track", "atRisk": "At risk", "offTrack": "Off track"}
+
+
+def cmd_project_updates(args):
+    opts, rest = parse_args(args, ["limit"])
+    if not rest:
+        print("usage: lr project updates <project_url or name> [--limit <n>]")
+        sys.exit(1)
+    limit = int(opts.get("limit") or 5)
+    project_id = get_project_id(rest[0])
+    data = gql(
+        """
+        query projectUpdates($projectId: String!) {
+            project(id: $projectId) {
+                name
+                projectUpdates(first: 50) {
+                    nodes { createdAt health body user { name } }
+                }
+            }
+        }
+        """,
+        {"projectId": project_id},
+    )
+    project = data["project"]
+    updates = sorted(
+        project["projectUpdates"]["nodes"], key=lambda u: u["createdAt"], reverse=True
+    )
+    if not updates:
+        print(f"No status updates in project '{project['name']}'.")
+        return
+    for u in updates[:limit]:
+        date = u["createdAt"][:10]
+        health = HEALTH_LABELS.get(u.get("health"), u.get("health") or "")
+        author = (u.get("user") or {}).get("name", "?")
+        print(f"## {date} — {health} — {author}\n")
+        print(f"{u['body'].strip()}\n")
+
+
 def cmd_issue_list(args):
     opts, _ = parse_args(args, ["team", "project", "milestone"])
     team = opts.get("team")
@@ -910,6 +996,7 @@ PROJECT_SUBCOMMANDS = {
     "show": cmd_project_show,
     "milestones": cmd_project_milestones,
     "add-milestone": cmd_project_add_milestone,
+    "updates": cmd_project_updates,
 }
 
 
@@ -925,6 +1012,8 @@ def help_project():
     print("                              List a project's milestones with done/total issue counts")
     print("  add-milestone <project_url or name> <milestone_name> [--target <YYYY-MM-DD>]")
     print("                              Create a milestone in a project")
+    print("  updates <project_url or name> [--limit <n>]")
+    print("                              Show a project's status updates, newest first (default 5)")
 
 
 def cmd_project(args):
@@ -941,6 +1030,7 @@ ISSUE_SUBCOMMANDS = {
     "create": cmd_issue_create,
     "update": cmd_issue_update,
     "comment": cmd_issue_comment,
+    "edit-comment": cmd_issue_edit_comment,
     "open": cmd_issue_open,
     "link": cmd_issue_link,
 }
@@ -955,6 +1045,7 @@ def help_issue():
     print("  search <term> [options]     Full-text search across all issues")
     print("  create [options]            Create a new issue")
     print("  update <issue_id> [options] Update an existing issue")
+    print("  edit-comment <issue_id> <body>  Replace the body of your latest comment on the issue")
     print("  link <issue_id> [options]   Link an issue to other issues (blocks / blocked-by / related / duplicate)\n")
     print("Options for 'list':")
     print("  --team <team_key>           Filter by team key (e.g. IDO, DAST)")

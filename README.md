@@ -52,10 +52,16 @@ lr issue update IDO-134 --estimate M --comment "Picking this up today"
 # Add a comment
 lr issue comment IDO-134 "Repro steps are in the attached log"
 
+# Replace the body of your latest comment on an issue
+lr issue edit-comment IDO-134 "Repro steps and logs are attached"
+
 # List projects (optionally filter by team/status; --limit defaults to 100)
 lr project list --team ENG
 lr project list --status started --limit 20
 
 # Show a project overview
 lr project show "Q1 Roadmap"
+
+# Show a project's status updates, newest first (--limit defaults to 5)
+lr project updates "Q1 Roadmap" --limit 3
 ```
